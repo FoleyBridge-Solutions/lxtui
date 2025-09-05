@@ -4,7 +4,7 @@
 *.pdb
 
 # Cargo
-Cargo.lock
+# Cargo.lock - commented out for binary packages
 
 # IDE
 .idea/
