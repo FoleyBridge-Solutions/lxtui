@@ -1,0 +1,150 @@
+use anyhow::Result;
+use futures::StreamExt;
+use log::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use tokio::net::UnixStream;
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use url::Url;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LxdEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub timestamp: String,
+    pub metadata: serde_json::Value,
+    pub project: Option<String>,
+    pub location: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationEvent {
+    pub id: String,
+    pub class: String,
+    pub description: String,
+    pub status: String,
+    pub status_code: i32,
+    pub progress: Option<i32>,
+    pub err: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+pub struct LxdWebSocketClient {
+    ws_stream: Option<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>,
+    unix_ws_stream: Option<WebSocketStream<UnixStream>>,
+}
+
+impl LxdWebSocketClient {
+    pub async fn connect_events() -> Result<Self> {
+        // Try to connect to LXD events via Unix socket
+        let socket_paths = vec![
+            PathBuf::from("/var/lib/lxd/unix.socket"),
+            PathBuf::from("/var/snap/lxd/common/lxd/unix.socket"),
+        ];
+        
+        for socket_path in socket_paths {
+            if socket_path.exists() {
+                match Self::connect_unix_websocket(&socket_path, "/1.0/events?type=operation,lifecycle").await {
+                    Ok(stream) => {
+                        info!("Connected to LXD WebSocket events at {:?}", socket_path);
+                        return Ok(Self {
+                            ws_stream: None,
+                            unix_ws_stream: Some(stream),
+                        });
+                    }
+                    Err(e) => {
+                        warn!("Failed to connect to WebSocket at {:?}: {:?}", socket_path, e);
+                    }
+                }
+            }
+        }
+        
+        // If Unix socket doesn't work, try HTTPS (requires certificates)
+        match Self::connect_https_websocket("wss://127.0.0.1:8443/1.0/events?type=operation,lifecycle").await {
+            Ok(stream) => {
+                info!("Connected to LXD WebSocket events via HTTPS");
+                Ok(Self {
+                    ws_stream: Some(stream),
+                    unix_ws_stream: None,
+                })
+            }
+            Err(e) => {
+                error!("Failed to connect to LXD WebSocket: {:?}", e);
+                Err(e)
+            }
+        }
+    }
+    
+    async fn connect_unix_websocket(socket_path: &PathBuf, path: &str) -> Result<WebSocketStream<UnixStream>> {
+        let stream = UnixStream::connect(socket_path).await?;
+        
+        // Create WebSocket handshake request
+        let request = format!(
+            "GET {} HTTP/1.1\r\n\
+             Host: localhost\r\n\
+             Connection: Upgrade\r\n\
+             Upgrade: websocket\r\n\
+             Sec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n\r\n",
+            path
+        );
+        
+        use tokio::io::{AsyncWriteExt, AsyncReadExt};
+        let mut stream = stream;
+        stream.write_all(request.as_bytes()).await?;
+        
+        // Read response (simplified - in production would need proper HTTP parsing)
+        let mut response = vec![0u8; 1024];
+        stream.read(&mut response).await?;
+        
+        // Convert to WebSocket stream (this is simplified - real implementation would need proper handshake)
+        // For now, return error as Unix socket WebSocket is complex
+        Err(anyhow::anyhow!("Unix socket WebSocket not fully implemented"))
+    }
+    
+    async fn connect_https_websocket(url: &str) -> Result<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>> {
+        let url = Url::parse(url)?;
+        let (ws_stream, _) = connect_async(url).await?;
+        Ok(ws_stream)
+    }
+    
+    pub async fn next_event(&mut self) -> Option<LxdEvent> {
+        if let Some(stream) = &mut self.ws_stream {
+            match stream.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    match serde_json::from_str::<LxdEvent>(&text) {
+                        Ok(event) => {
+                            debug!("Received LXD event: {:?}", event.event_type);
+                            Some(event)
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse LXD event: {:?}", e);
+                            None
+                        }
+                    }
+                }
+                Some(Ok(Message::Close(_))) => {
+                    info!("WebSocket connection closed");
+                    None
+                }
+                Some(Err(e)) => {
+                    error!("WebSocket error: {:?}", e);
+                    None
+                }
+                _ => None,
+            }
+        } else if let Some(_stream) = &mut self.unix_ws_stream {
+            // Unix socket WebSocket handling would go here
+            None
+        } else {
+            None
+        }
+    }
+    
+    pub async fn close(mut self) {
+        if let Some(mut stream) = self.ws_stream {
+            let _ = stream.close(None).await;
+        }
+        // Unix socket close would go here
+    }
+}

@@ -1,0 +1,20 @@
+# Clippy configuration for LXTUI
+# See: https://doc.rust-lang.org/clippy/configuration.html
+
+# Maximum allowed cognitive complexity for a function
+cognitive-complexity-threshold = 30
+
+# Maximum number of lines for a function
+too-many-lines-threshold = 150
+
+# Maximum number of arguments for a function
+too-many-arguments-threshold = 7
+
+# Maximum size of types in bytes
+type-complexity-threshold = 250
+
+# Maximum number of single char bindings  
+single-char-binding-names-threshold = 4
+
+# Avoid false positives for large error enums
+enum-variant-size-threshold = 200

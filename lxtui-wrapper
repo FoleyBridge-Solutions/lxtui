@@ -1,0 +1,23 @@
+#!/bin/bash
+# LXTUI wrapper script to handle shell exec
+
+# Run lxtui and capture the exit code
+/home/psi/.local/bin/lxtui-bin "$@"
+EXIT_CODE=$?
+
+# Check if we should exec into a container (exit code 42)
+if [ $EXIT_CODE -eq 42 ]; then
+    # Read the container name from a temp file
+    if [ -f /tmp/lxtui-exec-container ]; then
+        CONTAINER=$(cat /tmp/lxtui-exec-container)
+        rm -f /tmp/lxtui-exec-container
+        
+        # Try to exec with bash first, then sh
+        lxc exec "$CONTAINER" -- /bin/bash 2>/dev/null || lxc exec "$CONTAINER" -- /bin/sh
+        
+        # Run lxtui again after shell exits
+        exec "$0" "$@"
+    fi
+fi
+
+exit $EXIT_CODE
