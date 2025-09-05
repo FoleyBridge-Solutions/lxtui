@@ -1,6 +1,6 @@
 [package]
 name = "lxtui"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["LXTUI Contributors"]
 description = "A modern terminal user interface for managing LXC/LXD containers with intuitive keyboard shortcuts and real-time operation tracking"
